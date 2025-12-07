@@ -1,0 +1,8 @@
+{
+  "/page": "app/page.js",
+  "/admin/inventory/page": "app/admin/inventory/page.js",
+  "/admin/rfqs/page": "app/admin/rfqs/page.js",
+  "/admin/analytics/page": "app/admin/analytics/page.js",
+  "/admin/settings/page": "app/admin/settings/page.js",
+  "/customer/home/page": "app/customer/home/page.js"
+}
