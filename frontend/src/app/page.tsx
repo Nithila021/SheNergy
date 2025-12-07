@@ -4,21 +4,49 @@ import { useState } from 'react'
 import { Mail, Lock, Eye, EyeOff, Car } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import { api } from '@/services/api'
+import { useAuth } from '@/context/AuthContext'
 
 export default function LoginPage() {
   const router = useRouter()
+  const { setCustomer } = useAuth()
   const [showPassword, setShowPassword] = useState(false)
   const [userType, setUserType] = useState<'customer' | 'dealership'>('customer')
-  const [email, setEmail] = useState('')
+  const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    // Navigate based on user type
-    if (userType === 'customer') {
+    setError(null)
+
+    if (!username || !password) {
+      setError('Please enter username and password')
+      return
+    }
+
+    if (userType === 'dealership') {
+      // For now only customer login is wired to backend
+      setError('Dealership login is not implemented in this prototype. Please use customer login.')
+      return
+    }
+
+    try {
+      setLoading(true)
+      const result = await api.login({ username, password }) as any
+
+      if (!result?.customer) {
+        setError('Login failed. Please try again.')
+        return
+      }
+
+      setCustomer(result.customer)
       router.push('/customer/home')
-    } else {
-      router.push('/admin/dashboard')
+    } catch (err: any) {
+      setError(err?.message || 'Login failed. Please check your credentials.')
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -66,19 +94,19 @@ export default function LoginPage() {
 
           {/* Login Form */}
           <form onSubmit={handleSubmit} className="space-y-5">
-            {/* Email Input */}
+            {/* Username Input */}
             <div>
-              <label htmlFor="email" className="block text-sm font-medium text-text-light mb-2">
-                Email or Phone
+              <label htmlFor="username" className="block text-sm font-medium text-text-light mb-2">
+                Username
               </label>
               <div className="relative">
                 <Mail className="absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 text-electric-blue opacity-50" />
                 <input
-                  id="email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@example.com"
+                  id="username"
+                  type="text"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="Enter your username"
                   className="w-full pl-12 pr-4 py-3 rounded-lg bg-card-dark border border-electric-blue border-opacity-30 focus:border-electric-blue focus:border-opacity-100 focus:ring-2 focus:ring-electric-blue focus:ring-opacity-20 text-text-light placeholder-gray-500 transition-all duration-300 outline-none"
                 />
               </div>
@@ -126,10 +154,16 @@ export default function LoginPage() {
             {/* Submit Button */}
             <button
               type="submit"
-              className="w-full py-3 px-4 rounded-lg bg-gradient-to-r from-electric-blue to-electric-cyan text-primary-dark font-semibold shadow-glow hover:shadow-lg hover:scale-105 transition-all duration-300 transform"
+              disabled={loading}
+              className="w-full py-3 px-4 rounded-lg bg-gradient-to-r from-electric-blue to-electric-cyan text-primary-dark font-semibold shadow-glow hover:shadow-lg hover:scale-105 transition-all duration-300 transform disabled:opacity-60 disabled:hover:scale-100"
             >
-              Sign In
+              {loading ? 'Signing in...' : 'Sign In'}
             </button>
+            {error && (
+              <p className="mt-3 text-sm text-red-400">
+                {error}
+              </p>
+            )}
           </form>
 
           {/* Divider */}

@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { X, Send, MessageCircle, AlertCircle, CheckCircle2 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
+import { api } from '@/services/api'
 
 interface Message {
   id: string
@@ -23,9 +24,11 @@ type ChatState = 'idle' | 'booking' | 'predictive' | 'service_selection' | 'wait
 interface NextuneAssistProps {
   triggerBooking?: boolean
   onServiceSelected?: (service: PredictedService, acceptsWait: boolean, maxWaitDays: number) => void
+  customerId?: string
+  vin?: string
 }
 
-export default function NextuneAssist({ triggerBooking = false, onServiceSelected }: NextuneAssistProps) {
+export default function NextuneAssist({ triggerBooking = false, onServiceSelected, customerId, vin }: NextuneAssistProps) {
   const router = useRouter()
   const [isOpen, setIsOpen] = useState(triggerBooking)
   const [messages, setMessages] = useState<Message[]>([
@@ -38,14 +41,12 @@ export default function NextuneAssist({ triggerBooking = false, onServiceSelecte
   ])
   const [inputValue, setInputValue] = useState('')
   const [chatState, setChatState] = useState<ChatState>(triggerBooking ? 'booking' : 'idle')
-  const [suggestedServices] = useState<PredictedService[]>([
-    { name: 'Brake Pad Replacement', urgency: 'critical', daysUntilNeeded: 15, estimatedCost: '₹7,499' },
-    { name: 'Battery Health Check', urgency: 'info', daysUntilNeeded: 60, estimatedCost: '₹0' },
-    { name: 'Air Filter Replacement', urgency: 'warning', daysUntilNeeded: 30, estimatedCost: '₹1,999' },
-  ])
+  const [suggestedServices, setSuggestedServices] = useState<PredictedService[]>([])
   const [acceptsWait, setAcceptsWait] = useState<boolean | null>(null)
   const [maxWaitDays, setMaxWaitDays] = useState(7)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const [sessionId, setSessionId] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -55,13 +56,77 @@ export default function NextuneAssist({ triggerBooking = false, onServiceSelecte
     scrollToBottom()
   }, [messages])
 
-  const handleStartBooking = () => {
+  const ensureSession = async () => {
+    if (sessionId) return sessionId
+    const body: any = {}
+    if (customerId) body.customer_id = customerId
+    if (vin) body.vin = vin
+    const resp = await api.createChatSession(body) as any
+    setSessionId(resp.session_id)
+    return resp.session_id as string
+  }
+
+  const sendToBackend = async (userText: string) => {
+    try {
+      setBusy(true)
+      const id = await ensureSession()
+      const resp = await api.sendChatMessage({
+        session_id: id,
+        message: userText,
+        customer_id: customerId,
+        vin,
+      }) as any
+
+      // Main Gemini reply
+      if (resp.reply) {
+        addBotMessage(resp.reply)
+      }
+
+      // Map predictive recommendations into suggested services (if present)
+      if (resp.recommendations && Array.isArray(resp.recommendations)) {
+        const mapped: PredictedService[] = resp.recommendations.map((r: any) => ({
+          name: r.service_code || r.description || 'Recommended Service',
+          urgency: 'info',
+          daysUntilNeeded: 30,
+          estimatedCost: r.estimated_cost ? `₹${r.estimated_cost}` : '—',
+        }))
+        setSuggestedServices(mapped)
+        setChatState('predictive')
+      }
+
+      // If rankings returned, summarise them in chat
+      if (resp.rankings && Array.isArray(resp.rankings)) {
+        const top = resp.rankings[0]
+        addBotMessage(
+          `Top dealership: ${top.dealership_name} (${top.area}). Score: ${top.score?.toFixed?.(2) ?? 'N/A'}. ` +
+            `Est. delay: ${top.estimated_delay_minutes ?? 0} mins.`
+        )
+      }
+
+      // If appointment returned, acknowledge it
+      if (resp.appointment) {
+        const a = resp.appointment
+        addBotMessage(
+          `I have an appointment at ${a.dealership_name} on ${new Date(
+            a.requested_datetime
+          ).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}. ` +
+            `Estimated cost: ₹${a.estimated_total_cost ?? '—'}.`
+        )
+        setChatState('completed')
+      }
+    } catch (err: any) {
+      addBotMessage(err?.message || 'Sorry, something went wrong while talking to the backend.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleStartBooking = async () => {
     setChatState('booking')
-    addBotMessage('Great! Let me run our predictive model to check your vehicle health and suggest services. 🔍')
-    setTimeout(() => {
-      setChatState('predictive')
-      addBotMessage('✅ Predictive analysis complete! I found these recommended services for your 2024 Tata Nexon EV:')
-    }, 1000)
+    addBotMessage('Great! Tell me what issues you are facing, or press Book Appointment and I will run the predictive model.')
+    if (customerId && vin) {
+      await ensureSession()
+    }
   }
 
   const handleSelectService = (service: PredictedService) => {
@@ -107,17 +172,13 @@ export default function NextuneAssist({ triggerBooking = false, onServiceSelecte
     setMessages((prev) => [...prev, userMessage])
   }
 
-  const handleSendMessage = () => {
+  const handleSendMessage = async () => {
     if (!inputValue.trim()) return
     addUserMessage(inputValue)
     setInputValue('')
 
-    if (chatState === 'idle') {
-      if (inputValue.toLowerCase().includes('book') || inputValue.toLowerCase().includes('service')) {
-        handleStartBooking()
-      } else {
-        addBotMessage('I can help you with booking a service, checking your appointment status, or connecting with support. What would you like to do?')
-      }
+    if (chatState === 'idle' || chatState === 'booking' || chatState === 'predictive' || chatState === 'wait_confirmation') {
+      await sendToBackend(inputValue)
     }
   }
 
@@ -257,12 +318,19 @@ export default function NextuneAssist({ triggerBooking = false, onServiceSelecte
               <div className="px-4 py-3 border-t border-electric-blue border-opacity-20">
                 <div className="flex flex-col gap-2">
                   <button
-                    onClick={handleStartBooking}
+                    disabled={busy}
+                    onClick={() => {
+                      addUserMessage('I want to book a service appointment')
+                      sendToBackend('I want to book a service appointment')
+                    }}
                     className="w-full px-4 py-2 rounded-lg bg-gradient-to-r from-electric-blue to-electric-cyan text-primary-dark font-semibold text-sm hover:scale-105 transition-transform"
                   >
                     📅 Book Appointment
                   </button>
-                  <button className="w-full px-4 py-2 rounded-lg bg-card-dark border border-electric-blue text-electric-blue font-semibold text-sm hover:bg-opacity-50 transition-all">
+                  <button
+                    disabled={busy}
+                    className="w-full px-4 py-2 rounded-lg bg-card-dark border border-electric-blue text-electric-blue font-semibold text-sm hover:bg-opacity-50 transition-all"
+                  >
                     ❓ Get Support
                   </button>
                 </div>
@@ -277,11 +345,17 @@ export default function NextuneAssist({ triggerBooking = false, onServiceSelecte
                     type="text"
                     value={inputValue}
                     onChange={(e) => setInputValue(e.target.value)}
-                    onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
+                    onKeyPress={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        handleSendMessage()
+                      }
+                    }}
                     placeholder="Type a message..."
                     className="flex-1 bg-transparent text-text-light placeholder-gray-500 outline-none text-sm"
                   />
                   <button
+                    disabled={busy}
                     onClick={handleSendMessage}
                     className="p-2 rounded-full bg-gradient-to-r from-electric-blue to-electric-cyan text-primary-dark hover:scale-110 transition-transform"
                   >

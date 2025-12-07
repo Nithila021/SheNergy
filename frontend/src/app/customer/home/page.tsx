@@ -1,11 +1,58 @@
 'use client'
 
+import { useEffect, useMemo, useState } from 'react'
 import { AlertCircle, Zap, MapPin, Calendar, ChevronRight, Zap as ZapIcon } from 'lucide-react'
-import { useState } from 'react'
 import SheNergyAssist from '@/components/SheNergyAssistV3'
+import { useAuth } from '@/context/AuthContext'
+import { api } from '@/services/api'
+
+interface Recommendation {
+  service_code: string
+  description?: string
+  estimated_cost?: number
+  urgency_score?: number
+}
+
+interface Appointment {
+  id: string
+  dealership_name: string
+  requested_datetime: string
+}
 
 export default function CustomerHomePage() {
+  const { customer } = useAuth()
   const [triggerChatbot, setTriggerChatbot] = useState(false)
+  const [recommendations, setRecommendations] = useState<Recommendation[]>([])
+  const [appointments, setAppointments] = useState<Appointment[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const primaryVehicle = useMemo(() => customer?.vehicles?.[0], [customer]) as
+    | { vin: string; model: string; year: number }
+    | undefined
+
+  useEffect(() => {
+    const load = async () => {
+      if (!customer || !primaryVehicle) return
+      setLoading(true)
+      setError(null)
+      try {
+        const [pred, appts] = await Promise.all([
+          api.predictMaintenance({ customer_id: customer.customer_id, vin: primaryVehicle.vin }) as any,
+          api.listAppointments(customer.customer_id) as any,
+        ])
+
+        setRecommendations(pred?.recommendations || [])
+        setAppointments(appts?.appointments || [])
+      } catch (err: any) {
+        setError(err?.message || 'Failed to load vehicle insights')
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    load()
+  }, [customer, primaryVehicle])
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-primary-dark via-primary-dark to-card-dark">
@@ -13,7 +60,9 @@ export default function CustomerHomePage() {
       <header className="sticky top-0 z-40 bg-card-dark bg-opacity-80 backdrop-blur-md border-b border-electric-blue border-opacity-20">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-text-light">Welcome, Priya</h1>
+            <h1 className="text-2xl font-bold text-text-light">
+              {customer ? `Welcome, ${customer.name}` : 'Welcome'}
+            </h1>
             <p className="text-sm text-gray-400">Your vehicle health status</p>
           </div>
           <div className="flex items-center gap-4">
@@ -48,23 +97,27 @@ export default function CustomerHomePage() {
 
             {/* Vehicle Details */}
             <div className="md:col-span-2">
-              <h2 className="text-2xl font-bold text-text-light mb-4">2024 Tata Nexon EV</h2>
+              <h2 className="text-2xl font-bold text-text-light mb-4">
+                {primaryVehicle
+                  ? `${primaryVehicle.year} ${primaryVehicle.model}`
+                  : 'No vehicle on file'}
+              </h2>
               <div className="grid grid-cols-2 gap-4 mb-6">
                 <div>
-                  <p className="text-sm text-gray-400">Mileage</p>
-                  <p className="text-lg font-semibold text-electric-blue">8,250 km</p>
+                  <p className="text-sm text-gray-400">Customer ID</p>
+                  <p className="text-lg font-semibold text-electric-blue">{customer?.customer_id}</p>
                 </div>
                 <div>
-                  <p className="text-sm text-gray-400">Last Service</p>
-                  <p className="text-lg font-semibold text-electric-blue">32 days ago</p>
+                  <p className="text-sm text-gray-400">VIN</p>
+                  <p className="text-lg font-semibold text-electric-blue">{primaryVehicle?.vin || '-'}</p>
                 </div>
                 <div>
-                  <p className="text-sm text-gray-400">Battery Health</p>
-                  <p className="text-lg font-semibold text-neon-green">96%</p>
+                  <p className="text-sm text-gray-400">Email</p>
+                  <p className="text-lg font-semibold text-neon-green">{customer?.email}</p>
                 </div>
                 <div>
-                  <p className="text-sm text-gray-400">Status</p>
-                  <p className="text-lg font-semibold text-neon-green">Excellent</p>
+                  <p className="text-sm text-gray-400">Phone</p>
+                  <p className="text-lg font-semibold text-neon-green">{customer?.phone}</p>
                 </div>
               </div>
 
@@ -109,27 +162,37 @@ export default function CustomerHomePage() {
           </div>
         </div>
 
-        {/* Alert Section */}
-        <div className="mb-8 glass-card-dark p-6 rounded-2xl border-l-4 border-warning-yellow">
-          <div className="flex items-start gap-4">
-            <AlertCircle className="w-6 h-6 text-warning-yellow flex-shrink-0 mt-1" />
-            <div className="flex-1">
-              <h3 className="text-lg font-semibold text-text-light mb-2">Maintenance Alert</h3>
-              <p className="text-gray-300 mb-4">Brake pads replacement recommended in approximately 15 days or 400 km</p>
-              <div className="flex gap-3">
-                <button
-                  onClick={() => setTriggerChatbot(true)}
-                  className="px-4 py-2 rounded-lg bg-gradient-to-r from-electric-blue to-electric-cyan text-primary-dark font-semibold shadow-glow hover:scale-105 transition-transform"
-                >
-                  Book Service
-                </button>
-                <button className="px-4 py-2 rounded-lg bg-card-dark border border-electric-blue text-electric-blue font-semibold hover:bg-opacity-50 transition-all">
-                  Learn More
-                </button>
+        {/* Alert Section - from predictive recommendations */}
+        {recommendations.length > 0 && (
+          <div className="mb-8 glass-card-dark p-6 rounded-2xl border-l-4 border-warning-yellow">
+            <div className="flex items-start gap-4">
+              <AlertCircle className="w-6 h-6 text-warning-yellow flex-shrink-0 mt-1" />
+              <div className="flex-1">
+                <h3 className="text-lg font-semibold text-text-light mb-2">Maintenance Alerts</h3>
+                <ul className="text-gray-300 mb-4 space-y-1">
+                  {recommendations.map((rec) => (
+                    <li key={rec.service_code} className="text-sm">
+                      <span className="font-semibold text-text-light">{rec.service_code}</span>
+                      {rec.description ? ` – ${rec.description}` : ''}
+                      {typeof rec.estimated_cost === 'number' && ` • Est. ₹${rec.estimated_cost.toLocaleString('en-IN')}`}
+                    </li>
+                  ))}
+                </ul>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setTriggerChatbot(true)}
+                    className="px-4 py-2 rounded-lg bg-gradient-to-r from-electric-blue to-electric-cyan text-primary-dark font-semibold shadow-glow hover:scale-105 transition-transform"
+                  >
+                    Book Service
+                  </button>
+                  <button className="px-4 py-2 rounded-lg bg-card-dark border border-electric-blue text-electric-blue font-semibold hover:bg-opacity-50 transition-all">
+                    Learn More
+                  </button>
+                </div>
               </div>
             </div>
           </div>
-        </div>
+        )}
 
         {/* Quick Actions */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
@@ -161,19 +224,29 @@ export default function CustomerHomePage() {
         {/* Upcoming Appointments */}
         <div className="glass-card-dark p-6 rounded-2xl">
           <h3 className="text-xl font-bold text-text-light mb-6">Upcoming Appointments</h3>
+          {loading && <p className="text-sm text-gray-400">Loading your appointments…</p>}
+          {error && !loading && <p className="text-sm text-red-400">{error}</p>}
+          {!loading && !error && appointments.length === 0 && (
+            <p className="text-sm text-gray-400">No upcoming appointments yet.</p>
+          )}
           <div className="space-y-4">
-            {[
-              { center: 'Bangalore EV Service Center', date: 'Dec 18, 2024 at 10:00 AM' },
-              { center: 'Whitefield Tata Service', date: 'Dec 25, 2024 at 2:30 PM' },
-            ].map((appointment, i) => (
-              <div key={i} className="flex items-center justify-between p-4 bg-card-dark rounded-lg border border-electric-blue border-opacity-20 hover:border-opacity-100 transition-all">
+            {appointments.map((appointment) => (
+              <div
+                key={appointment.id}
+                className="flex items-center justify-between p-4 bg-card-dark rounded-lg border border-electric-blue border-opacity-20 hover:border-opacity-100 transition-all"
+              >
                 <div className="flex items-center gap-4">
                   <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-electric-blue to-electric-cyan flex items-center justify-center">
                     <MapPin className="w-6 h-6 text-primary-dark" />
                   </div>
                   <div>
-                    <p className="font-semibold text-text-light">{appointment.center}</p>
-                    <p className="text-sm text-gray-400">{appointment.date}</p>
+                    <p className="font-semibold text-text-light">{appointment.dealership_name}</p>
+                    <p className="text-sm text-gray-400">
+                      {new Date(appointment.requested_datetime).toLocaleString('en-IN', {
+                        dateStyle: 'medium',
+                        timeStyle: 'short',
+                      })}
+                    </p>
                   </div>
                 </div>
                 <button className="px-4 py-2 rounded-lg bg-gradient-to-r from-electric-blue to-electric-cyan text-primary-dark font-semibold shadow-glow hover:scale-105 transition-transform">
@@ -186,7 +259,9 @@ export default function CustomerHomePage() {
       </main>
 
       {/* Chatbot - Triggered from CTA */}
-      {triggerChatbot && <SheNergyAssist triggerBooking={true} />}
+      {triggerChatbot && primaryVehicle && customer && (
+        <SheNergyAssist triggerBooking={true} customerId={customer.customer_id} vin={primaryVehicle.vin} />
+      )}
     </div>
   )
 }

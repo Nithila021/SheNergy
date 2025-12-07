@@ -3,7 +3,8 @@
 import { Home, Calendar, Package, FileText, Settings, LogOut, Menu, X, MessageCircle, BarChart3, HelpCircle } from 'lucide-react'
 import { useState } from 'react'
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
+import { useAuth } from '@/context/AuthContext'
 
 interface NavigationProps {
   userType: 'customer' | 'admin'
@@ -12,6 +13,8 @@ interface NavigationProps {
 export default function Navigation({ userType }: NavigationProps) {
   const [isOpen, setIsOpen] = useState(false)
   const pathname = usePathname()
+  const router = useRouter()
+  const { setCustomer } = useAuth()
 
   const customerLinks = [
     { href: '/customer/home', label: 'Home', icon: Home },
@@ -77,13 +80,16 @@ export default function Navigation({ userType }: NavigationProps) {
         </nav>
 
         <div className="p-4 border-t border-electric-blue border-opacity-20">
-          <Link
-            href="/"
-            className="flex items-center gap-3 px-4 py-3 rounded-lg text-gray-400 hover:text-red-400 transition-all"
+          <button
+            onClick={() => {
+              setCustomer(null)
+              router.push('/')
+            }}
+            className="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-left text-gray-400 hover:text-red-400 transition-all"
           >
             <LogOut className="w-5 h-5" />
             <span>Logout</span>
-          </Link>
+          </button>
         </div>
       </aside>
 
@@ -121,14 +127,17 @@ export default function Navigation({ userType }: NavigationProps) {
             </nav>
 
             <div className="p-4 border-t border-electric-blue border-opacity-20">
-              <Link
-                href="/"
-                onClick={() => setIsOpen(false)}
-                className="flex items-center gap-3 px-4 py-3 rounded-lg text-gray-400 hover:text-red-400 transition-all"
+              <button
+                onClick={() => {
+                  setCustomer(null)
+                  setIsOpen(false)
+                  router.push('/')
+                }}
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-left text-gray-400 hover:text-red-400 transition-all"
               >
                 <LogOut className="w-5 h-5" />
                 <span>Logout</span>
-              </Link>
+              </button>
             </div>
           </div>
         </div>
