@@ -13,6 +13,7 @@ interface Message {
 }
 
 interface PredictedService {
+  service_code: string
   name: string
   urgency: 'critical' | 'warning' | 'info'
   daysUntilNeeded: number
@@ -47,6 +48,16 @@ export default function NextuneAssist({ triggerBooking = false, onServiceSelecte
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [selectedServiceCodes, setSelectedServiceCodes] = useState<string[]>([])
+
+  const SERVICE_LABELS: Record<string, { name: string }> = {
+    PERIODIC_10K: { name: 'Engine Oil & Filter Change (10,000 km Service)' },
+    PERIODIC_20K: { name: 'Fluids Top-up & Brake Check (20,000 km Service)' },
+    PERIODIC_30K: { name: 'Detailed Check-up & Suspension Inspection (30,000 km Service)' },
+    BRAKE_CHECK: { name: 'Brake Inspection & Pad Check' },
+    CLUTCH_ADJUST: { name: 'Clutch Inspection & Adjustment' },
+    AC_CHECK: { name: 'AC Cooling & Leak Check' },
+  }
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -66,7 +77,7 @@ export default function NextuneAssist({ triggerBooking = false, onServiceSelecte
     return resp.session_id as string
   }
 
-  const sendToBackend = async (userText: string) => {
+  const sendToBackend = async (userText: string, options?: { selectedServiceCodes?: string[] }) => {
     try {
       setBusy(true)
       const id = await ensureSession()
@@ -75,6 +86,7 @@ export default function NextuneAssist({ triggerBooking = false, onServiceSelecte
         message: userText,
         customer_id: customerId,
         vin,
+        selected_service_codes: options?.selectedServiceCodes,
       }) as any
 
       // Main Gemini reply
@@ -82,35 +94,96 @@ export default function NextuneAssist({ triggerBooking = false, onServiceSelecte
         addBotMessage(resp.reply)
       }
 
-      // Map predictive recommendations into suggested services (if present)
-      if (resp.recommendations && Array.isArray(resp.recommendations)) {
+      // Map predictive recommendations into suggested services (if present).
+      // Only do this when we are not also receiving rankings/appointment, so we
+      // don't re-open the selection UI after the user has already chosen services.
+      if (resp.recommendations && Array.isArray(resp.recommendations) && !resp.rankings && !resp.appointment) {
         const mapped: PredictedService[] = resp.recommendations.map((r: any) => ({
-          name: r.service_code || r.description || 'Recommended Service',
-          urgency: 'info',
-          daysUntilNeeded: 30,
+          service_code: r.service_code || r.description || 'UNKNOWN_CODE',
+          name: SERVICE_LABELS[r.service_code]?.name || r.description || r.service_code || 'Recommended Service',
+          urgency: r.urgency_label === 'urgent' ? 'critical' : r.urgency_label === 'soon' ? 'warning' : 'info',
+          daysUntilNeeded: r.recommended_window ? 7 : 30,
           estimatedCost: r.estimated_cost ? `₹${r.estimated_cost}` : '—',
         }))
         setSuggestedServices(mapped)
+        setSelectedServiceCodes([])
         setChatState('predictive')
       }
 
-      // If rankings returned, summarise them in chat
+      // If the backend is asking whether the user accepts an inventory-related delay,
+      // it will return selected_dealership without rankings. Switch to the
+      // wait_confirmation state so the Yes/No buttons are shown.
+      if (resp.selected_dealership && !resp.rankings) {
+        setChatState('wait_confirmation')
+      }
+
+      // If rankings returned, rely on the Gemini reply for explanation.
+      // Also stash them into sessionStorage so the Appointments page can
+      // render the same ranked list when the user is redirected.
       if (resp.rankings && Array.isArray(resp.rankings)) {
-        const top = resp.rankings[0]
-        addBotMessage(
-          `Top dealership: ${top.dealership_name} (${top.area}). Score: ${top.score?.toFixed?.(2) ?? 'N/A'}. ` +
-            `Est. delay: ${top.estimated_delay_minutes ?? 0} mins.`
-        )
+        if (typeof window !== 'undefined') {
+          try {
+            const payload = {
+              rankings: resp.rankings,
+              generatedAt: new Date().toISOString(),
+            }
+            window.sessionStorage.setItem('senergy_last_rankings', JSON.stringify(payload))
+
+            // Store a lightweight chat summary that preserves the initial issue
+            // description (e.g. "AC not cooling") plus the most recent turns.
+            const userMessages = messages.filter((m) => m.type === 'user').map((m) => m.content)
+            if (userMessages.length > 0) {
+              const lowerMessages = userMessages.map((m) => m.toLowerCase())
+              const acIndex = lowerMessages.findIndex((m) =>
+                m.includes(' ac') ||
+                m.includes('a/c') ||
+                m.includes('air conditioning') ||
+                m.includes('aircon') ||
+                m.includes('no air') ||
+                m.includes('no cooling')
+              )
+
+              const firstIssue =
+                acIndex >= 0 ? userMessages[acIndex] : userMessages[0]
+
+              const tail = userMessages.slice(-3)
+              const pieces = [firstIssue, ...tail]
+
+              // Deduplicate while preserving order so the summary stays compact.
+              const seen = new Set<string>()
+              const unique = pieces.filter((p) => {
+                const key = p.trim()
+                if (!key || seen.has(key)) return false
+                seen.add(key)
+                return true
+              })
+
+              const summary = unique.join(' | ')
+              window.sessionStorage.setItem('senergy_chat_summary', summary)
+            }
+          } catch (e) {
+            // ignore storage failures; page will just fall back to defaults
+          }
+        }
+
+        if (chatState === 'predictive' || chatState === 'wait_confirmation') {
+          setChatState('booking')
+        }
+
+        if (!resp.selected_dealership) {
+          setTimeout(() => {
+            router.push('/customer/appointments?source=chat&filter=dealerships')
+          }, 1500)
+        }
       }
 
       // If appointment returned, acknowledge it
       if (resp.appointment) {
         const a = resp.appointment
         addBotMessage(
-          `I have an appointment at ${a.dealership_name} on ${new Date(
+          `Your appointment details are ready at ${a.dealership_name} on ${new Date(
             a.requested_datetime
-          ).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}. ` +
-            `Estimated cost: ₹${a.estimated_total_cost ?? '—'}.`
+          ).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}. You can view full information on the Appointments page.`
         )
         setChatState('completed')
       }
@@ -129,27 +202,45 @@ export default function NextuneAssist({ triggerBooking = false, onServiceSelecte
     }
   }
 
-  const handleSelectService = (service: PredictedService) => {
-    addUserMessage(`I want to book: ${service.name}`)
-    setChatState('wait_confirmation')
-    addBotMessage(`Perfect! For ${service.name}, are you okay with waiting if a dealership doesn't have all parts in stock? This might get you better options.`)
+  const toggleServiceSelection = (service: PredictedService) => {
+    setSelectedServiceCodes((prev) =>
+      prev.includes(service.service_code)
+        ? prev.filter((code) => code !== service.service_code)
+        : [...prev, service.service_code]
+    )
   }
 
-  const handleWaitPreference = (accepts: boolean) => {
-    setAcceptsWait(accepts)
-    addUserMessage(accepts ? `Yes, I can wait up to ${maxWaitDays} days` : 'No, I need it ASAP')
-    setChatState('completed')
-    addBotMessage('✅ Got it! I\'ve filtered the best dealerships for you. Check the Appointments page to browse options and book your service.')
-    
-    // Callback to parent component with filter preferences
-    if (onServiceSelected && suggestedServices.length > 0) {
-      onServiceSelected(suggestedServices[0], accepts, maxWaitDays)
+  const handleBookSelectedServices = async () => {
+    if (selectedServiceCodes.length === 0) return
+    // Persist selected services so the Appointments page can show a cost breakdown
+    if (typeof window !== 'undefined') {
+      try {
+        const selected = suggestedServices.filter((s) => selectedServiceCodes.includes(s.service_code))
+        const payload = selected.map((s) => ({
+          service_code: s.service_code,
+          name: s.name,
+          estimatedCost: s.estimatedCost,
+        }))
+        window.sessionStorage.setItem('senergy_selected_services', JSON.stringify(payload))
+      } catch (e) {
+        // ignore storage failures; booking flow will still work without cost breakdown
+      }
     }
-    
-    // Navigate to appointments page
-    setTimeout(() => {
-      router.push('/customer/appointments?filter=dealerships')
-    }, 1500)
+
+    addUserMessage(`I want to book these services: ${selectedServiceCodes.join(', ')}`)
+    await sendToBackend('I want to book these services', { selectedServiceCodes })
+  }
+
+  const handleWaitPreference = async (accepts: boolean) => {
+    setAcceptsWait(accepts)
+    const userText = accepts
+      ? `Yes, I am okay with a possible delay of up to ${maxWaitDays} days`
+      : 'No, I am not okay with a delay and need it as soon as possible'
+
+    addUserMessage(userText)
+    // Let the backend handle pendingInventoryCheck and return updated rankings,
+    // which will then be stored and trigger redirect via the existing logic.
+    await sendToBackend(userText)
   }
 
   const addBotMessage = (content: string) => {
@@ -248,32 +339,51 @@ export default function NextuneAssist({ triggerBooking = false, onServiceSelecte
 
               {/* Predictive Services */}
               {chatState === 'predictive' && (
-                <div className="space-y-2">
-                  {suggestedServices.map((service, i) => (
-                    <button
-                      key={i}
-                      onClick={() => handleSelectService(service)}
-                      className="w-full text-left p-3 rounded-lg bg-gradient-to-r from-card-dark to-primary-dark border border-electric-blue border-opacity-30 hover:border-opacity-100 transition-all"
-                    >
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1">
-                          <p className="font-semibold text-text-light text-sm">{service.name}</p>
-                          <p className="text-xs text-gray-400">In {service.daysUntilNeeded} days • {service.estimatedCost}</p>
+                <div className="space-y-3">
+                  <div className="text-xs text-gray-400 mb-1">Select one or more services to include in your booking:</div>
+                  {suggestedServices.map((service, i) => {
+                    const isSelected = selectedServiceCodes.includes(service.service_code)
+                    return (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={() => toggleServiceSelection(service)}
+                        className={`w-full text-left p-3 rounded-lg border transition-all ${
+                          isSelected
+                            ? 'bg-gradient-to-r from-electric-blue to-electric-cyan bg-opacity-20 border-electric-cyan shadow-glow'
+                            : 'bg-gradient-to-r from-card-dark to-primary-dark border-electric-blue border-opacity-30 hover:border-opacity-100'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1">
+                            <p className="font-semibold text-text-light text-sm">{service.name}</p>
+                            <p className="text-xs text-gray-400">
+                              In {service.daysUntilNeeded} days • {service.estimatedCost}
+                            </p>
+                          </div>
+                          <span
+                            className={`badge text-xs ${
+                              service.urgency === 'critical'
+                                ? 'badge-danger'
+                                : service.urgency === 'warning'
+                                ? 'badge-warning'
+                                : 'badge-info'
+                            }`}
+                          >
+                            {service.urgency}
+                          </span>
                         </div>
-                        <span
-                          className={`badge text-xs ${
-                            service.urgency === 'critical'
-                              ? 'badge-danger'
-                              : service.urgency === 'warning'
-                              ? 'badge-warning'
-                              : 'badge-info'
-                          }`}
-                        >
-                          {service.urgency}
-                        </span>
-                      </div>
-                    </button>
-                  ))}
+                      </button>
+                    )
+                  })}
+                  <button
+                    type="button"
+                    disabled={busy || selectedServiceCodes.length === 0}
+                    onClick={handleBookSelectedServices}
+                    className="w-full mt-1 px-4 py-2 rounded-lg bg-gradient-to-r from-electric-blue to-electric-cyan text-primary-dark font-semibold text-sm hover:scale-105 transition-transform disabled:opacity-50 disabled:hover:scale-100"
+                  >
+                    Book selected services
+                  </button>
                 </div>
               )}
 

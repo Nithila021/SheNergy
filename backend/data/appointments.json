@@ -1,13 +1,73 @@
 [
   {
     "appointment_id": "APT_001",
-    "customer_id": "CUST_BLR_002",
-    "vin": "KA03MN4321",
-    "dealership_id": "DLR_BLR_001",
-    "service_codes_requested": ["PERIODIC_20K"],
-    "requested_datetime": "2024-12-10T10:00:00+05:30",
-    "inventory_needed": ["Engine Oil 5W30", "Oil Filter Hyundai"],
+    "customer_id": "CUST_BLR_001",
+    "vin": "MH12AB1234",
+    "dealership_id": "DLR_BLR_002",
+    "service_codes_requested": [
+      "PERIODIC_20K"
+    ],
+    "requested_datetime": "2025-12-09T06:30:00.000Z",
+    "inventory_needed": [
+      "Engine Oil 5W30"
+    ],
     "status": "confirmed",
-    "estimated_delay_minutes": 20
+    "estimated_delay_minutes": 0,
+    "pickup_drop_required": false,
+    "user_issue_summary": "I want to book these services: PERIODIC_20K | I want to book these services: PERIODIC_20K | I want to book these services: PERIODIC_20K"
+  },
+  {
+    "appointment_id": "APT_002",
+    "customer_id": "CUST_BLR_001",
+    "vin": "MH12AB1234",
+    "dealership_id": "DLR_BLR_002",
+    "service_codes_requested": [
+      "PERIODIC_10K"
+    ],
+    "requested_datetime": "2025-12-09T11:30:00.000Z",
+    "inventory_needed": [
+      "Engine Oil 5W30"
+    ],
+    "status": "confirmed",
+    "estimated_delay_minutes": 0,
+    "pickup_drop_required": false,
+    "user_issue_summary": "no air at all | no noises  | I want to book these services: PERIODIC_10K"
+  },
+  {
+    "appointment_id": "APT_003",
+    "customer_id": "CUST_BLR_001",
+    "vin": "MH12AB1234",
+    "dealership_id": "DLR_BLR_002",
+    "service_codes_requested": [
+      "PERIODIC_10K"
+    ],
+    "requested_datetime": "2025-12-08T09:30:00.000Z",
+    "inventory_needed": [
+      "Engine Oil 5W30"
+    ],
+    "status": "confirmed",
+    "estimated_delay_minutes": 0,
+    "pickup_drop_required": false,
+    "user_issue_summary": "hi my windsheild wipers wont work | no  | consistently  | I want to book these services: PERIODIC_10K"
+  },
+  {
+    "appointment_id": "APT_004",
+    "customer_id": "CUST_BLR_001",
+    "vin": "MH12AB1234",
+    "dealership_id": "DLR_BLR_001",
+    "service_codes_requested": [
+      "PERIODIC_10K",
+      "WIPER_CHECK"
+    ],
+    "requested_datetime": "2025-12-09T11:30:00.000Z",
+    "inventory_needed": [
+      "Engine Oil 5W30",
+      "Engine Oil 5W30"
+    ],
+    "status": "confirmed",
+    "estimated_delay_minutes": 0,
+    "pickup_drop_required": true,
+    "pickup_address": "A1204 ncc ivory heights ",
+    "user_issue_summary": "hey my windshieldwipers wont work | no sound at all | start the car  | I want to book these services: PERIODIC_10K"
   }
 ]

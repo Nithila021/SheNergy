@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { AlertCircle, Zap, MapPin, Calendar, ChevronRight, Zap as ZapIcon } from 'lucide-react'
+import { AlertCircle, Zap, MapPin, Calendar, ChevronRight, Phone, Zap as ZapIcon } from 'lucide-react'
 import SheNergyAssist from '@/components/SheNergyAssistV3'
 import { useAuth } from '@/context/AuthContext'
 import { api } from '@/services/api'
@@ -11,12 +11,59 @@ interface Recommendation {
   description?: string
   estimated_cost?: number
   urgency_score?: number
+  // new fields from upgraded predictive model
+  urgency_label?: 'urgent' | 'soon' | 'can_wait'
+  recommended_window?: string
+  reason?: string
+}
+
+const SERVICE_LABELS: Record<
+  string,
+  {
+    name: string
+    description: string
+  }
+> = {
+  PERIODIC_10K: {
+    name: 'Periodic Service - 10,000 km',
+    description: 'Engine oil change, oil filter, basic inspection, washing.',
+  },
+  PERIODIC_20K: {
+    name: 'Periodic Service - 20,000 km',
+    description: 'Fluids top-up, brake inspection, air filter cleaning, alignment check.',
+  },
+  PERIODIC_30K: {
+    name: 'Periodic Service - 30,000 km',
+    description: 'Detailed inspection, coolant check, suspension check.',
+  },
+  BRAKE_CHECK: {
+    name: 'Brake Inspection & Pad Check',
+    description: 'Inspect brake pads, discs, and braking performance for city traffic.',
+  },
+  CLUTCH_ADJUST: {
+    name: 'Clutch Inspection & Adjustment',
+    description: 'Check clutch wear and adjust for smoother engagement in stop-go traffic.',
+  },
+  AC_CHECK: {
+    name: 'AC System Check',
+    description: 'Inspect cooling performance, refrigerant level, condenser, and cabin filter.',
+  },
+  WIPER_CHECK: {
+    name: 'Windshield Wiper Inspection & Motor Check',
+    description: 'Check wiper blades, linkage, and motor operation; basic adjustment or recommendation.',
+  },
 }
 
 interface Appointment {
   id: string
+  dealership_id: string
   dealership_name: string
   requested_datetime: string
+  status: string
+  pickup_drop_required?: boolean
+  pickup_address?: string
+  user_issue_summary?: string
+  service_codes_requested: string[]
 }
 
 export default function CustomerHomePage() {
@@ -26,6 +73,10 @@ export default function CustomerHomePage() {
   const [appointments, setAppointments] = useState<Appointment[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null)
+  const [dealershipContacts, setDealershipContacts] = useState<
+    Record<string, { name: string; address?: string; phone?: string }>
+  >({})
 
   const primaryVehicle = useMemo(() => customer?.vehicles?.[0], [customer]) as
     | { vin: string; model: string; year: number }
@@ -37,13 +88,42 @@ export default function CustomerHomePage() {
       setLoading(true)
       setError(null)
       try {
-        const [pred, appts] = await Promise.all([
+        const [pred, appts, dealershipsResp] = await Promise.all([
           api.predictMaintenance({ customer_id: customer.customer_id, vin: primaryVehicle.vin }) as any,
           api.listAppointments(customer.customer_id) as any,
+          api.listDealerships() as any,
         ])
 
         setRecommendations(pred?.recommendations || [])
-        setAppointments(appts?.appointments || [])
+        const dlrList = dealershipsResp?.dealerships || []
+        const dlrMap: Record<string, { name: string; address?: string; phone?: string }> = {}
+        for (const d of dlrList) {
+          dlrMap[d.dealership_id] = {
+            name: d.name,
+            address: d.address,
+            phone: d.phone || '+91 80 0000 0000',
+          }
+        }
+        setDealershipContacts(dlrMap)
+
+        const backendAppts = (appts?.appointments || []) as any[]
+        const mapped: Appointment[] = backendAppts.map((a) => {
+          const dlr = dlrMap[a.dealership_id] || { name: 'Service Center' }
+          return {
+            id: a.appointment_id,
+            dealership_id: a.dealership_id,
+            dealership_name: dlr.name,
+            requested_datetime: a.requested_datetime,
+            status: a.status || 'confirmed',
+            pickup_drop_required: a.pickup_drop_required,
+            pickup_address: a.pickup_address,
+            user_issue_summary: a.user_issue_summary,
+            service_codes_requested: Array.isArray(a.service_codes_requested)
+              ? a.service_codes_requested
+              : [],
+          }
+        })
+        setAppointments(mapped)
       } catch (err: any) {
         setError(err?.message || 'Failed to load vehicle insights')
       } finally {
@@ -53,6 +133,31 @@ export default function CustomerHomePage() {
 
     load()
   }, [customer, primaryVehicle])
+
+  const SERVICE_COSTS: Record<string, number> = {
+    PERIODIC_10K: 5499,
+    PERIODIC_20K: 6499,
+    PERIODIC_30K: 7499,
+    BRAKE_CHECK: 1999,
+    CLUTCH_ADJUST: 1499,
+    CLUTCH_OVERHAUL: 11999,
+    WIPER_CHECK: 799,
+  }
+
+  const buildAppointmentServiceRows = (codes: string[]) => {
+    return codes.map((code) => {
+      const meta = SERVICE_LABELS[code] || {
+        name: code,
+        description: '',
+      }
+      const cost = SERVICE_COSTS[code]
+      return {
+        code,
+        name: meta.name,
+        cost,
+      }
+    })
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-primary-dark via-primary-dark to-card-dark">
@@ -78,6 +183,97 @@ export default function CustomerHomePage() {
               </svg>
             </button>
           </div>
+
+          {/* Appointment Details Panel */}
+          {selectedAppointment && (
+            <div className="mt-6 p-6 rounded-2xl glass-card-dark border border-electric-blue border-opacity-40">
+              <div className="flex items-start justify-between mb-4">
+                <div>
+                  <h4 className="text-lg font-semibold text-text-light mb-1">Appointment Details</h4>
+                  <p className="text-sm text-gray-400">
+                    {new Date(selectedAppointment.requested_datetime).toLocaleString('en-IN', {
+                      dateStyle: 'medium',
+                      timeStyle: 'short',
+                    })}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setSelectedAppointment(null)}
+                  className="text-xs text-gray-400 hover:text-electric-blue"
+                >
+                  Close
+                </button>
+              </div>
+
+              {/* Dealership Info */}
+              <div className="mb-4">
+                <p className="text-sm font-semibold text-text-light mb-1">
+                  {selectedAppointment.dealership_name}
+                </p>
+                <div className="text-xs text-gray-400 space-y-1">
+                  {dealershipContacts[selectedAppointment.dealership_id]?.address && (
+                    <p className="flex items-start gap-2">
+                      <MapPin className="w-4 h-4 mt-0.5" />
+                      <span>{dealershipContacts[selectedAppointment.dealership_id]?.address}</span>
+                    </p>
+                  )}
+                  <p className="flex items-center gap-2">
+                    <Phone className="w-4 h-4" />
+                    <span>{dealershipContacts[selectedAppointment.dealership_id]?.phone}</span>
+                  </p>
+                </div>
+              </div>
+
+              {/* Services and Costs */}
+              <div className="mb-4">
+                <p className="text-sm font-semibold text-text-light mb-2">Planned services</p>
+                {selectedAppointment.service_codes_requested.length === 0 ? (
+                  <p className="text-xs text-gray-500">No services recorded for this booking.</p>
+                ) : (
+                  <div className="space-y-1 text-xs text-gray-300">
+                    {buildAppointmentServiceRows(selectedAppointment.service_codes_requested).map((row) => (
+                      <div key={row.code} className="flex items-center justify-between">
+                        <span>{row.name}</span>
+                        {typeof row.cost === 'number' && (
+                          <span className="text-gray-200 font-medium">
+                            ₹{row.cost.toLocaleString('en-IN')}
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Pickup Info */}
+              {selectedAppointment.pickup_drop_required && (
+                <div className="mb-4">
+                  <p className="text-sm font-semibold text-text-light mb-1">Pickup & drop</p>
+                  <p className="text-xs text-gray-300 mb-1">Pickup requested</p>
+                  {selectedAppointment.pickup_address && (
+                    <p className="text-xs text-gray-400 whitespace-pre-line">
+                      {selectedAppointment.pickup_address}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Chat Summary for Mechanic */}
+              {selectedAppointment.user_issue_summary && (
+                <div className="mt-4 p-4 rounded-xl bg-primary-dark bg-opacity-60 border border-electric-blue border-opacity-40">
+                  <p className="text-sm font-semibold text-text-light mb-1">
+                    Issue summary from chat
+                  </p>
+                  <p className="text-xs text-gray-300 whitespace-pre-line">
+                    {selectedAppointment.user_issue_summary}
+                  </p>
+                  <p className="text-[10px] text-gray-500 mt-1">
+                    (For the mechanic to quickly understand the context and adjust services if needed.)
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </header>
 
@@ -169,14 +365,53 @@ export default function CustomerHomePage() {
               <AlertCircle className="w-6 h-6 text-warning-yellow flex-shrink-0 mt-1" />
               <div className="flex-1">
                 <h3 className="text-lg font-semibold text-text-light mb-2">Maintenance Alerts</h3>
-                <ul className="text-gray-300 mb-4 space-y-1">
-                  {recommendations.map((rec) => (
-                    <li key={rec.service_code} className="text-sm">
-                      <span className="font-semibold text-text-light">{rec.service_code}</span>
-                      {rec.description ? ` – ${rec.description}` : ''}
-                      {typeof rec.estimated_cost === 'number' && ` • Est. ₹${rec.estimated_cost.toLocaleString('en-IN')}`}
-                    </li>
-                  ))}
+                <ul className="text-gray-300 mb-4 space-y-3">
+                  {recommendations.map((rec) => {
+                    const meta = SERVICE_LABELS[rec.service_code] || {
+                      name: rec.service_code,
+                      description: rec.reason || rec.description || '',
+                    }
+
+                    let pillColor = 'bg-warning-yellow/20 text-warning-yellow'
+                    if (rec.urgency_label === 'urgent') {
+                      pillColor = 'bg-red-500/20 text-red-400'
+                    } else if (rec.urgency_label === 'soon') {
+                      pillColor = 'bg-warning-yellow/20 text-warning-yellow'
+                    } else if (rec.urgency_label === 'can_wait') {
+                      pillColor = 'bg-emerald-500/20 text-emerald-400'
+                    }
+
+                    return (
+                      <li key={rec.service_code} className="text-sm">
+                        <div className="flex items-center justify-between gap-2 mb-1">
+                          <span className="font-semibold text-text-light">{meta.name}</span>
+                          {rec.urgency_label && (
+                            <span
+                              className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${pillColor}`}
+                            >
+                              {rec.urgency_label === 'urgent'
+                                ? 'Urgent'
+                                : rec.urgency_label === 'soon'
+                                  ? 'Soon'
+                                  : 'Can wait'}
+                              {rec.recommended_window ? ` • ${rec.recommended_window}` : ''}
+                            </span>
+                          )}
+                        </div>
+                        {meta.description && (
+                          <p className="text-xs text-gray-400 mb-0.5">{meta.description}</p>
+                        )}
+                        {rec.reason && rec.reason !== meta.description && (
+                          <p className="text-xs text-gray-500">{rec.reason}</p>
+                        )}
+                        {typeof rec.estimated_cost === 'number' && (
+                          <p className="text-xs text-gray-400 mt-0.5">
+                            Est. ₹{rec.estimated_cost.toLocaleString('en-IN')}
+                          </p>
+                        )}
+                      </li>
+                    )
+                  })}
                 </ul>
                 <div className="flex gap-3">
                   <button
@@ -249,7 +484,10 @@ export default function CustomerHomePage() {
                     </p>
                   </div>
                 </div>
-                <button className="px-4 py-2 rounded-lg bg-gradient-to-r from-electric-blue to-electric-cyan text-primary-dark font-semibold shadow-glow hover:scale-105 transition-transform">
+                <button
+                  onClick={() => setSelectedAppointment(appointment)}
+                  className="px-4 py-2 rounded-lg bg-gradient-to-r from-electric-blue to-electric-cyan text-primary-dark font-semibold shadow-glow hover:scale-105 transition-transform"
+                >
                   View Details
                 </button>
               </div>

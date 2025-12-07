@@ -11,6 +11,9 @@ interface Appointment {
   inventory_needed: string[];
   status: string;
   estimated_delay_minutes: number;
+  pickup_drop_required?: boolean;
+  pickup_address?: string;
+  user_issue_summary?: string;
 }
 
 interface InventoryItem {
@@ -49,7 +52,10 @@ router.post('/book', async (req: Request, res: Response) => {
       requested_datetime,
       inventory_needed,
       inventory_ok,
-      estimated_delay_minutes
+      estimated_delay_minutes,
+      pickup_drop_required,
+      pickup_address,
+      user_issue_summary
     } = req.body as {
       customer_id: string;
       vin: string;
@@ -59,6 +65,9 @@ router.post('/book', async (req: Request, res: Response) => {
       inventory_needed: string[];
       inventory_ok: boolean;
       estimated_delay_minutes?: number;
+      pickup_drop_required?: boolean;
+      pickup_address?: string;
+      user_issue_summary?: string;
     };
 
     if (!customer_id || !vin || !dealership_id || !requested_datetime || !Array.isArray(service_codes_requested)) {
@@ -97,7 +106,10 @@ router.post('/book', async (req: Request, res: Response) => {
       requested_datetime,
       inventory_needed: inventory_needed || [],
       status,
-      estimated_delay_minutes: delay
+      estimated_delay_minutes: delay,
+      pickup_drop_required,
+      pickup_address,
+      user_issue_summary
     };
 
     appointments.push(appointment);

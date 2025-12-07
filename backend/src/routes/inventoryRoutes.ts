@@ -35,18 +35,20 @@ router.post('/check', async (req: Request, res: Response) => {
       return res.status(404).json({ message: 'Dealership not found' });
     }
 
-    let allAvailable = true;
+    const missing_parts: string[] = [];
     for (const label of inventory_needed) {
       const item = dealership.inventory.find((i) => i.part_name === label);
       if (!item || item.quantity <= 0) {
-        allAvailable = false;
-        break;
+        missing_parts.push(label);
       }
     }
 
-    if (!allAvailable) {
+    if (missing_parts.length > 0) {
+      const estimated_delay_days = Math.min(14, missing_parts.length * 3) || 3;
       return res.status(200).json({
         inventory_ok: false,
+        missing_parts,
+        estimated_delay_days,
         message: 'Some required parts are currently unavailable. Are you okay with a delay?'
       });
     }
