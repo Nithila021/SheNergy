@@ -24,7 +24,8 @@ const BACKEND_BASE = process.env.BACKEND_INTERNAL_URL || 'http://localhost:5000/
 // Gemini client
 const geminiApiKey = process.env.GEMINI_API_KEY || '';
 const genAI = geminiApiKey ? new GoogleGenerativeAI(geminiApiKey) : null;
-const chatModelId = 'gemini-1.5-pro';
+// Use the current Gemini chat model ID as per AI Studio
+const chatModelId = 'gemini-2.5-flash';
 
 async function generateReply(systemContext: string, userMessage: string): Promise<string> {
   if (!genAI) {
